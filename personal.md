@@ -1,6 +1,6 @@
 # 个人复现记录（Claude Code Best / CCB）
 
-> 本文档为个人操作备忘；**勿将真实 API Key 提交到公开仓库**。若需随仓库忽略，可将 `personal.md` 加入 `.gitignore` 或仅保留占位符。
+
 
 ---
 
