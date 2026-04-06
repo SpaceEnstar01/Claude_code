@@ -349,6 +349,223 @@ export function ConsoleOAuthFlow({
       </Box>
     </Box>;
 }
+
+/** Hooks must live here — not inside `OAuthStatusMessage`'s switch — or React hook order breaks when changing `oauthStatus.state`. */
+function CustomPlatformOAuthForm({
+  oauthStatus: cp,
+  setOAuthStatus,
+  onDone,
+}: {
+  oauthStatus: Extract<OAuthStatus, { state: 'custom_platform' }>;
+  setOAuthStatus: (status: OAuthStatus) => void;
+  onDone: () => void;
+}): React.ReactNode {
+  type Field = 'base_url' | 'api_key' | 'haiku_model' | 'sonnet_model' | 'opus_model';
+  const FIELDS: Field[] = ['base_url', 'api_key', 'haiku_model', 'sonnet_model', 'opus_model'];
+  const { activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel } = cp;
+  const displayValues: Record<Field, string> = { base_url: baseUrl, api_key: apiKey, haiku_model: haikuModel, sonnet_model: sonnetModel, opus_model: opusModel };
+
+  const [inputValue, setInputValue] = useState(() => displayValues[activeField]);
+  const [inputCursorOffset, setInputCursorOffset] = useState(() => displayValues[activeField].length);
+
+  const buildState = useCallback((field: Field, value: string, newActive?: Field) => {
+    const s = { state: 'custom_platform' as const, activeField: newActive ?? activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel };
+    switch (field) {
+      case 'base_url': return { ...s, baseUrl: value };
+      case 'api_key': return { ...s, apiKey: value };
+      case 'haiku_model': return { ...s, haikuModel: value };
+      case 'sonnet_model': return { ...s, sonnetModel: value };
+      case 'opus_model': return { ...s, opusModel: value };
+    }
+  }, [activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel]);
+
+  const doSave = useCallback(() => {
+    const finalVals = { ...displayValues, [activeField]: inputValue };
+    const env: Record<string, string> = {};
+    if (finalVals.base_url) env.ANTHROPIC_BASE_URL = finalVals.base_url;
+    if (finalVals.api_key) env.ANTHROPIC_AUTH_TOKEN = finalVals.api_key;
+    if (finalVals.haiku_model) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = finalVals.haiku_model;
+    if (finalVals.sonnet_model) env.ANTHROPIC_DEFAULT_SONNET_MODEL = finalVals.sonnet_model;
+    if (finalVals.opus_model) env.ANTHROPIC_DEFAULT_OPUS_MODEL = finalVals.opus_model;
+    const { error } = updateSettingsForSource('userSettings', { modelType: 'anthropic' as any, env } as any);
+    if (error) {
+      setOAuthStatus({ state: 'error', message: `Failed to save: ${error.message}`, toRetry: { state: 'custom_platform', baseUrl: '', apiKey: '', haikuModel: '', sonnetModel: '', opusModel: '', activeField: 'base_url' } });
+    } else {
+      for (const [k, v] of Object.entries(env)) process.env[k] = v;
+      setOAuthStatus({ state: 'success' });
+      void onDone();
+    }
+  }, [activeField, inputValue, displayValues, setOAuthStatus, onDone]);
+
+  const handleEnter = useCallback(() => {
+    const idx = FIELDS.indexOf(activeField);
+    setOAuthStatus(buildState(activeField, inputValue));
+    if (idx === FIELDS.length - 1) {
+      doSave();
+    } else {
+      const next = FIELDS[idx + 1]!;
+      setInputValue(displayValues[next] ?? '');
+      setInputCursorOffset((displayValues[next] ?? '').length);
+    }
+  }, [activeField, inputValue, buildState, doSave, displayValues, setOAuthStatus]);
+
+  useKeybinding('tabs:next', () => {
+    const idx = FIELDS.indexOf(activeField);
+    if (idx < FIELDS.length - 1) {
+      setOAuthStatus(buildState(activeField, inputValue, FIELDS[idx + 1]));
+      setInputValue(displayValues[FIELDS[idx + 1]!] ?? '');
+      setInputCursorOffset((displayValues[FIELDS[idx + 1]!] ?? '').length);
+    }
+  }, { context: 'Tabs' });
+  useKeybinding('tabs:previous', () => {
+    const idx = FIELDS.indexOf(activeField);
+    if (idx > 0) {
+      setOAuthStatus(buildState(activeField, inputValue, FIELDS[idx - 1]));
+      setInputValue(displayValues[FIELDS[idx - 1]!] ?? '');
+      setInputCursorOffset((displayValues[FIELDS[idx - 1]!] ?? '').length);
+    }
+  }, { context: 'Tabs' });
+  useKeybinding('confirm:no', () => {
+    setOAuthStatus({ state: 'idle' });
+  }, { context: 'Confirmation' });
+
+  const columns = useTerminalSize().columns - 20;
+
+  const renderRow = (field: Field, label: string, opts?: { mask?: boolean; placeholder?: string }) => {
+    const active = activeField === field;
+    const val = displayValues[field];
+    return <Box>
+      <Text backgroundColor={active ? 'suggestion' : undefined} color={active ? 'inverseText' : undefined}>{` ${label} `}</Text>
+      <Text> </Text>
+      {active
+        ? <TextInput value={inputValue} onChange={setInputValue} onSubmit={handleEnter} cursorOffset={inputCursorOffset} onChangeCursorOffset={setInputCursorOffset} columns={columns} mask={opts?.mask ? "*" : undefined} focus={true} />
+        : (val
+          ? <Text color="success">{opts?.mask ? val.slice(0, 8) + '·'.repeat(Math.max(0, val.length - 8)) : val}</Text>
+          : null)}
+    </Box>;
+  };
+
+  return <Box flexDirection="column" gap={1}>
+    <Text bold={true}>Custom Platform Setup</Text>
+    <Box flexDirection="column" gap={1}>
+      {renderRow('base_url', 'Base URL ')}
+      {renderRow('api_key', 'API Key  ', { mask: true })}
+      {renderRow('haiku_model', 'Haiku    ')}
+      {renderRow('sonnet_model', 'Sonnet   ')}
+      {renderRow('opus_model', 'Opus     ')}
+    </Box>
+    <Text dimColor>Tab to switch · Enter on last field to save · Esc to go back</Text>
+  </Box>;
+}
+
+function OpenAIChatApiOAuthForm({
+  oauthStatus: op,
+  setOAuthStatus,
+  onDone,
+}: {
+  oauthStatus: Extract<OAuthStatus, { state: 'openai_chat_api' }>;
+  setOAuthStatus: (status: OAuthStatus) => void;
+  onDone: () => void;
+}): React.ReactNode {
+  type OpenAIField = 'base_url' | 'api_key' | 'haiku_model' | 'sonnet_model' | 'opus_model';
+  const OPENAI_FIELDS: OpenAIField[] = ['base_url', 'api_key', 'haiku_model', 'sonnet_model', 'opus_model'];
+  const { activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel } = op;
+  const openaiDisplayValues: Record<OpenAIField, string> = { base_url: baseUrl, api_key: apiKey, haiku_model: haikuModel, sonnet_model: sonnetModel, opus_model: opusModel };
+
+  const [openaiInputValue, setOpenaiInputValue] = useState(() => openaiDisplayValues[activeField]);
+  const [openaiInputCursorOffset, setOpenaiInputCursorOffset] = useState(() => openaiDisplayValues[activeField].length);
+
+  const buildOpenAIState = useCallback((field: OpenAIField, value: string, newActive?: OpenAIField) => {
+    const s = { state: 'openai_chat_api' as const, activeField: newActive ?? activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel };
+    switch (field) {
+      case 'base_url': return { ...s, baseUrl: value };
+      case 'api_key': return { ...s, apiKey: value };
+      case 'haiku_model': return { ...s, haikuModel: value };
+      case 'sonnet_model': return { ...s, sonnetModel: value };
+      case 'opus_model': return { ...s, opusModel: value };
+    }
+  }, [activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel]);
+
+  const doOpenAISave = useCallback(() => {
+    const finalVals = { ...openaiDisplayValues, [activeField]: openaiInputValue };
+    const env: Record<string, string> = {};
+    if (finalVals.base_url) env.OPENAI_BASE_URL = finalVals.base_url;
+    if (finalVals.api_key) env.OPENAI_API_KEY = finalVals.api_key;
+    if (finalVals.haiku_model) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = finalVals.haiku_model;
+    if (finalVals.sonnet_model) env.ANTHROPIC_DEFAULT_SONNET_MODEL = finalVals.sonnet_model;
+    if (finalVals.opus_model) env.ANTHROPIC_DEFAULT_OPUS_MODEL = finalVals.opus_model;
+    const { error } = updateSettingsForSource('userSettings', { modelType: 'openai' as any, env } as any);
+    if (error) {
+      setOAuthStatus({ state: 'error', message: `Failed to save: ${error.message}`, toRetry: { state: 'openai_chat_api', baseUrl: '', apiKey: '', haikuModel: '', sonnetModel: '', opusModel: '', activeField: 'base_url' } });
+    } else {
+      for (const [k, v] of Object.entries(env)) process.env[k] = v;
+      setOAuthStatus({ state: 'success' });
+      void onDone();
+    }
+  }, [activeField, openaiInputValue, openaiDisplayValues, setOAuthStatus, onDone]);
+
+  const handleOpenAIEnter = useCallback(() => {
+    const idx = OPENAI_FIELDS.indexOf(activeField);
+    setOAuthStatus(buildOpenAIState(activeField, openaiInputValue));
+    if (idx === OPENAI_FIELDS.length - 1) {
+      doOpenAISave();
+    } else {
+      const next = OPENAI_FIELDS[idx + 1]!;
+      setOpenaiInputValue(openaiDisplayValues[next] ?? '');
+      setOpenaiInputCursorOffset((openaiDisplayValues[next] ?? '').length);
+    }
+  }, [activeField, openaiInputValue, buildOpenAIState, doOpenAISave, openaiDisplayValues, setOAuthStatus]);
+
+  useKeybinding('tabs:next', () => {
+    const idx = OPENAI_FIELDS.indexOf(activeField);
+    if (idx < OPENAI_FIELDS.length - 1) {
+      setOAuthStatus(buildOpenAIState(activeField, openaiInputValue, OPENAI_FIELDS[idx + 1]));
+      setOpenaiInputValue(openaiDisplayValues[OPENAI_FIELDS[idx + 1]!] ?? '');
+      setOpenaiInputCursorOffset((openaiDisplayValues[OPENAI_FIELDS[idx + 1]!] ?? '').length);
+    }
+  }, { context: 'Tabs' });
+  useKeybinding('tabs:previous', () => {
+    const idx = OPENAI_FIELDS.indexOf(activeField);
+    if (idx > 0) {
+      setOAuthStatus(buildOpenAIState(activeField, openaiInputValue, OPENAI_FIELDS[idx - 1]));
+      setOpenaiInputValue(openaiDisplayValues[OPENAI_FIELDS[idx - 1]!] ?? '');
+      setOpenaiInputCursorOffset((openaiDisplayValues[OPENAI_FIELDS[idx - 1]!] ?? '').length);
+    }
+  }, { context: 'Tabs' });
+  useKeybinding('confirm:no', () => {
+    setOAuthStatus({ state: 'idle' });
+  }, { context: 'Confirmation' });
+
+  const openaiColumns = useTerminalSize().columns - 20;
+
+  const renderOpenAIRow = (field: OpenAIField, label: string, opts?: { mask?: boolean }) => {
+    const active = activeField === field;
+    const val = openaiDisplayValues[field];
+    return <Box>
+      <Text backgroundColor={active ? 'suggestion' : undefined} color={active ? 'inverseText' : undefined}>{` ${label} `}</Text>
+      <Text> </Text>
+      {active
+        ? <TextInput value={openaiInputValue} onChange={setOpenaiInputValue} onSubmit={handleOpenAIEnter} cursorOffset={openaiInputCursorOffset} onChangeCursorOffset={setOpenaiInputCursorOffset} columns={openaiColumns} mask={opts?.mask ? "*" : undefined} focus={true} />
+        : (val
+          ? <Text color="success">{opts?.mask ? val.slice(0, 8) + '·'.repeat(Math.max(0, val.length - 8)) : val}</Text>
+          : null)}
+    </Box>;
+  };
+
+  return <Box flexDirection="column" gap={1}>
+    <Text bold={true}>OpenAI Compatible API Setup</Text>
+    <Text dimColor>Configure an OpenAI Chat Completions compatible endpoint (e.g. Ollama, DeepSeek, vLLM).</Text>
+    <Box flexDirection="column" gap={1}>
+      {renderOpenAIRow('base_url', 'Base URL ')}
+      {renderOpenAIRow('api_key', 'API Key  ', { mask: true })}
+      {renderOpenAIRow('haiku_model', 'Haiku    ')}
+      {renderOpenAIRow('sonnet_model', 'Sonnet   ')}
+      {renderOpenAIRow('opus_model', 'Opus     ')}
+    </Box>
+    <Text dimColor>Tab to switch · Enter on last field to save · Esc to go back</Text>
+  </Box>;
+}
+
 type OAuthStatusMessageProps = {
   oauthStatus: OAuthStatus;
   mode: 'login' | 'setup-token';
@@ -556,215 +773,9 @@ function OAuthStatusMessage(t0) {
         return t8;
       }
     case "custom_platform":
-      {
-        type Field = 'base_url' | 'api_key' | 'haiku_model' | 'sonnet_model' | 'opus_model';
-        const FIELDS: Field[] = ['base_url', 'api_key', 'haiku_model', 'sonnet_model', 'opus_model'];
-        const cp = oauthStatus as { state: 'custom_platform'; activeField: Field; baseUrl: string; apiKey: string; haikuModel: string; sonnetModel: string; opusModel: string };
-        const { activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel } = cp;
-        const displayValues: Record<Field, string> = { base_url: baseUrl, api_key: apiKey, haiku_model: haikuModel, sonnet_model: sonnetModel, opus_model: opusModel };
-
-        const [inputValue, setInputValue] = useState(() => displayValues[activeField]);
-        const [inputCursorOffset, setInputCursorOffset] = useState(() => displayValues[activeField].length);
-
-        // Build updated state with a given field changed
-        const buildState = useCallback((field: Field, value: string, newActive?: Field) => {
-          const s = { state: 'custom_platform' as const, activeField: newActive ?? activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel };
-          switch (field) {
-            case 'base_url': return { ...s, baseUrl: value };
-            case 'api_key': return { ...s, apiKey: value };
-            case 'haiku_model': return { ...s, haikuModel: value };
-            case 'sonnet_model': return { ...s, sonnetModel: value };
-            case 'opus_model': return { ...s, opusModel: value };
-          }
-        }, [activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel]);
-
-        // Tab switching: save current → update state → load target
-        const switchTo = useCallback((target: Field) => {
-          setOAuthStatus(buildState(activeField, inputValue, target));
-          setInputValue(displayValues[target] ?? '');
-          setInputCursorOffset((displayValues[target] ?? '').length);
-        }, [activeField, inputValue, displayValues, buildState, setOAuthStatus]);
-
-        const doSave = useCallback(() => {
-          const finalVals = { ...displayValues, [activeField]: inputValue };
-          const env: Record<string, string> = {};
-          if (finalVals.base_url) env.ANTHROPIC_BASE_URL = finalVals.base_url;
-          if (finalVals.api_key) env.ANTHROPIC_AUTH_TOKEN = finalVals.api_key;
-          if (finalVals.haiku_model) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = finalVals.haiku_model;
-          if (finalVals.sonnet_model) env.ANTHROPIC_DEFAULT_SONNET_MODEL = finalVals.sonnet_model;
-          if (finalVals.opus_model) env.ANTHROPIC_DEFAULT_OPUS_MODEL = finalVals.opus_model;
-          const { error } = updateSettingsForSource('userSettings', { modelType: 'anthropic' as any, env } as any);
-          if (error) {
-            setOAuthStatus({ state: 'error', message: `Failed to save: ${error.message}`, toRetry: { state: 'custom_platform', baseUrl: '', apiKey: '', haikuModel: '', sonnetModel: '', opusModel: '', activeField: 'base_url' } });
-          } else {
-            for (const [k, v] of Object.entries(env)) process.env[k] = v;
-            setOAuthStatus({ state: 'success' });
-            void onDone();
-          }
-        }, [activeField, inputValue, displayValues, setOAuthStatus, onDone]);
-
-        const handleEnter = useCallback(() => {
-          const idx = FIELDS.indexOf(activeField);
-          // Update current field value in state
-          setOAuthStatus(buildState(activeField, inputValue));
-          if (idx === FIELDS.length - 1) {
-            doSave();
-          } else {
-            const next = FIELDS[idx + 1]!;
-            setInputValue(displayValues[next] ?? '');
-            setInputCursorOffset((displayValues[next] ?? '').length);
-          }
-        }, [activeField, inputValue, buildState, doSave, displayValues, setOAuthStatus]);
-
-        useKeybinding('tabs:next', () => {
-          const idx = FIELDS.indexOf(activeField);
-          if (idx < FIELDS.length - 1) {
-            setOAuthStatus(buildState(activeField, inputValue, FIELDS[idx + 1]));
-            setInputValue(displayValues[FIELDS[idx + 1]!] ?? '');
-            setInputCursorOffset((displayValues[FIELDS[idx + 1]!] ?? '').length);
-          }
-        }, { context: 'Tabs' });
-        useKeybinding('tabs:previous', () => {
-          const idx = FIELDS.indexOf(activeField);
-          if (idx > 0) {
-            setOAuthStatus(buildState(activeField, inputValue, FIELDS[idx - 1]));
-            setInputValue(displayValues[FIELDS[idx - 1]!] ?? '');
-            setInputCursorOffset((displayValues[FIELDS[idx - 1]!] ?? '').length);
-          }
-        }, { context: 'Tabs' });
-        useKeybinding('confirm:no', () => {
-          setOAuthStatus({ state: 'idle' });
-        }, { context: 'Confirmation' });
-
-        const columns = useTerminalSize().columns - 20;
-
-        const renderRow = (field: Field, label: string, opts?: { mask?: boolean; placeholder?: string }) => {
-          const active = activeField === field;
-          const val = displayValues[field];
-          return <Box>
-            <Text backgroundColor={active ? 'suggestion' : undefined} color={active ? 'inverseText' : undefined}>{` ${label} `}</Text>
-            <Text> </Text>
-            {active
-              ? <TextInput value={inputValue} onChange={setInputValue} onSubmit={handleEnter} cursorOffset={inputCursorOffset} onChangeCursorOffset={setInputCursorOffset} columns={columns} mask={opts?.mask ? "*" : undefined} focus={true} />
-              : (val
-                ? <Text color="success">{opts?.mask ? val.slice(0, 8) + '·'.repeat(Math.max(0, val.length - 8)) : val}</Text>
-                : null)}
-          </Box>;
-        };
-
-        return <Box flexDirection="column" gap={1}>
-          <Text bold={true}>Custom Platform Setup</Text>
-          <Box flexDirection="column" gap={1}>
-            {renderRow('base_url', 'Base URL ')}
-            {renderRow('api_key', 'API Key  ', { mask: true })}
-            {renderRow('haiku_model', 'Haiku    ')}
-            {renderRow('sonnet_model', 'Sonnet   ')}
-            {renderRow('opus_model', 'Opus     ')}
-          </Box>
-          <Text dimColor>Tab to switch · Enter on last field to save · Esc to go back</Text>
-        </Box>;
-      }
+      return <CustomPlatformOAuthForm oauthStatus={oauthStatus} setOAuthStatus={setOAuthStatus} onDone={onDone} />;
     case "openai_chat_api":
-      {
-        type OpenAIField = 'base_url' | 'api_key' | 'haiku_model' | 'sonnet_model' | 'opus_model';
-        const OPENAI_FIELDS: OpenAIField[] = ['base_url', 'api_key', 'haiku_model', 'sonnet_model', 'opus_model'];
-        const op = oauthStatus as { state: 'openai_chat_api'; activeField: OpenAIField; baseUrl: string; apiKey: string; haikuModel: string; sonnetModel: string; opusModel: string };
-        const { activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel } = op;
-        const openaiDisplayValues: Record<OpenAIField, string> = { base_url: baseUrl, api_key: apiKey, haiku_model: haikuModel, sonnet_model: sonnetModel, opus_model: opusModel };
-
-        const [openaiInputValue, setOpenaiInputValue] = useState(() => openaiDisplayValues[activeField]);
-        const [openaiInputCursorOffset, setOpenaiInputCursorOffset] = useState(() => openaiDisplayValues[activeField].length);
-
-        const buildOpenAIState = useCallback((field: OpenAIField, value: string, newActive?: OpenAIField) => {
-          const s = { state: 'openai_chat_api' as const, activeField: newActive ?? activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel };
-          switch (field) {
-            case 'base_url': return { ...s, baseUrl: value };
-            case 'api_key': return { ...s, apiKey: value };
-            case 'haiku_model': return { ...s, haikuModel: value };
-            case 'sonnet_model': return { ...s, sonnetModel: value };
-            case 'opus_model': return { ...s, opusModel: value };
-          }
-        }, [activeField, baseUrl, apiKey, haikuModel, sonnetModel, opusModel]);
-
-        const doOpenAISave = useCallback(() => {
-          const finalVals = { ...openaiDisplayValues, [activeField]: openaiInputValue };
-          const env: Record<string, string> = {};
-          if (finalVals.base_url) env.OPENAI_BASE_URL = finalVals.base_url;
-          if (finalVals.api_key) env.OPENAI_API_KEY = finalVals.api_key;
-          if (finalVals.haiku_model) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = finalVals.haiku_model;
-          if (finalVals.sonnet_model) env.ANTHROPIC_DEFAULT_SONNET_MODEL = finalVals.sonnet_model;
-          if (finalVals.opus_model) env.ANTHROPIC_DEFAULT_OPUS_MODEL = finalVals.opus_model;
-          const { error } = updateSettingsForSource('userSettings', { modelType: 'openai' as any, env } as any);
-          if (error) {
-            setOAuthStatus({ state: 'error', message: `Failed to save: ${error.message}`, toRetry: { state: 'openai_chat_api', baseUrl: '', apiKey: '', haikuModel: '', sonnetModel: '', opusModel: '', activeField: 'base_url' } });
-          } else {
-            for (const [k, v] of Object.entries(env)) process.env[k] = v;
-            setOAuthStatus({ state: 'success' });
-            void onDone();
-          }
-        }, [activeField, openaiInputValue, openaiDisplayValues, setOAuthStatus, onDone]);
-
-        const handleOpenAIEnter = useCallback(() => {
-          const idx = OPENAI_FIELDS.indexOf(activeField);
-          setOAuthStatus(buildOpenAIState(activeField, openaiInputValue));
-          if (idx === OPENAI_FIELDS.length - 1) {
-            doOpenAISave();
-          } else {
-            const next = OPENAI_FIELDS[idx + 1]!;
-            setOpenaiInputValue(openaiDisplayValues[next] ?? '');
-            setOpenaiInputCursorOffset((openaiDisplayValues[next] ?? '').length);
-          }
-        }, [activeField, openaiInputValue, buildOpenAIState, doOpenAISave, openaiDisplayValues, setOAuthStatus]);
-
-        useKeybinding('tabs:next', () => {
-          const idx = OPENAI_FIELDS.indexOf(activeField);
-          if (idx < OPENAI_FIELDS.length - 1) {
-            setOAuthStatus(buildOpenAIState(activeField, openaiInputValue, OPENAI_FIELDS[idx + 1]));
-            setOpenaiInputValue(openaiDisplayValues[OPENAI_FIELDS[idx + 1]!] ?? '');
-            setOpenaiInputCursorOffset((openaiDisplayValues[OPENAI_FIELDS[idx + 1]!] ?? '').length);
-          }
-        }, { context: 'Tabs' });
-        useKeybinding('tabs:previous', () => {
-          const idx = OPENAI_FIELDS.indexOf(activeField);
-          if (idx > 0) {
-            setOAuthStatus(buildOpenAIState(activeField, openaiInputValue, OPENAI_FIELDS[idx - 1]));
-            setOpenaiInputValue(openaiDisplayValues[OPENAI_FIELDS[idx - 1]!] ?? '');
-            setOpenaiInputCursorOffset((openaiDisplayValues[OPENAI_FIELDS[idx - 1]!] ?? '').length);
-          }
-        }, { context: 'Tabs' });
-        useKeybinding('confirm:no', () => {
-          setOAuthStatus({ state: 'idle' });
-        }, { context: 'Confirmation' });
-
-        const openaiColumns = useTerminalSize().columns - 20;
-
-        const renderOpenAIRow = (field: OpenAIField, label: string, opts?: { mask?: boolean }) => {
-          const active = activeField === field;
-          const val = openaiDisplayValues[field];
-          return <Box>
-            <Text backgroundColor={active ? 'suggestion' : undefined} color={active ? 'inverseText' : undefined}>{` ${label} `}</Text>
-            <Text> </Text>
-            {active
-              ? <TextInput value={openaiInputValue} onChange={setOpenaiInputValue} onSubmit={handleOpenAIEnter} cursorOffset={openaiInputCursorOffset} onChangeCursorOffset={setOpenaiInputCursorOffset} columns={openaiColumns} mask={opts?.mask ? "*" : undefined} focus={true} />
-              : (val
-                ? <Text color="success">{opts?.mask ? val.slice(0, 8) + '·'.repeat(Math.max(0, val.length - 8)) : val}</Text>
-                : null)}
-          </Box>;
-        };
-
-        return <Box flexDirection="column" gap={1}>
-          <Text bold={true}>OpenAI Compatible API Setup</Text>
-          <Text dimColor>Configure an OpenAI Chat Completions compatible endpoint (e.g. Ollama, DeepSeek, vLLM).</Text>
-          <Box flexDirection="column" gap={1}>
-            {renderOpenAIRow('base_url', 'Base URL ')}
-            {renderOpenAIRow('api_key', 'API Key  ', { mask: true })}
-            {renderOpenAIRow('haiku_model', 'Haiku    ')}
-            {renderOpenAIRow('sonnet_model', 'Sonnet   ')}
-            {renderOpenAIRow('opus_model', 'Opus     ')}
-          </Box>
-          <Text dimColor>Tab to switch · Enter on last field to save · Esc to go back</Text>
-        </Box>;
-      }
+      return <OpenAIChatApiOAuthForm oauthStatus={oauthStatus} setOAuthStatus={setOAuthStatus} onDone={onDone} />;
     case "waiting_for_login":
       {
         let t1;
